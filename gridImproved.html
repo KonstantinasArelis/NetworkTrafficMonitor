@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Packet Matrix - Full Screen Density</title>
+    <style>
+        body {
+            background-color: #0d1117;
+            color: #c9d1d9;
+            font-family: sans-serif;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #ui-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 95vw;
+            margin: 15px 0;
+            flex-shrink: 0;
+        }
+
+        #legend {
+            display: flex;
+            gap: 20px;
+            font-size: 14px;
+        }
+        .legend-item { display: flex; align-items: center; gap: 8px; }
+        .box { width: 14px; height: 14px; border-radius: 2px; }
+
+        #stats {
+            font-size: 14px;
+            font-weight: bold;
+            background: #1f2428;
+            padding: 8px 16px;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            display: flex;
+            gap: 15px;
+        }
+
+        .stat-label {
+            color: #8b949e;
+        }
+
+        canvas {
+            background-color: #1f2428; 
+            border-radius: 2px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            image-rendering: pixelated; 
+            margin-bottom: 15px; 
+        }
+    </style>
+</head>
+<body>
+    <div id="ui-bar">
+        <div id="legend">
+            <div class="legend-item"><div class="box" style="background: #58a6ff;"></div> TCP</div>
+            <div class="legend-item"><div class="box" style="background: #3fb950;"></div> UDP</div>
+            <div class="legend-item"><div class="box" style="background: #e3b341;"></div> ICMP</div>
+            <div class="legend-item"><div class="box" style="background: #bc8cff;"></div> Other IP</div>
+            <div class="legend-item"><div class="box" style="background: #ff7b72;"></div> Non-IP (ARP)</div>
+        </div>
+        <div id="stats">
+            <div><span class="stat-label">Packets/s:</span> <span id="ppsValue" style="color: #58a6ff;">0</span></div>
+            <div><span class="stat-label">Batches/s:</span> <span id="bpsValue" style="color: #3fb950;">0</span></div>
+            <div><span class="stat-label">Lag:</span> <span id="lagValue" style="color: #ff7b72;">0</span> ms</div>
+        </div>
+    </div>
+
+    <canvas id="gridCanvas"></canvas>
+
+    <script>
+        const SQUARE_SIZE = 3;  
+        const GAP = 1;          
+        const CELL_SIZE = SQUARE_SIZE + GAP;
+
+        const canvas = document.getElementById('gridCanvas');
+        const ctx = canvas.getContext('2d');
+        const uiBar = document.getElementById('ui-bar');
+        
+        const lagValueSpan = document.getElementById('lagValue');
+        const ppsValueSpan = document.getElementById('ppsValue');
+        const bpsValueSpan = document.getElementById('bpsValue');
+
+        let COLS, ROWS, TOTAL_SQUARES;
+        let currentIndex = 0;
+
+        // --- High-Performance Rolling Average Logic ---
+        const NUM_BUCKETS = 10;
+        const lagSums = new Array(NUM_BUCKETS).fill(0);
+        const lagCounts = new Array(NUM_BUCKETS).fill(0);
+        const batchCounts = new Array(NUM_BUCKETS).fill(0);
+        const packetCounts = new Array(NUM_BUCKETS).fill(0);
+        let currentBucket = 0;
+
+        setInterval(() => {
+            let totalLag = 0;
+            let totalLagCount = 0;
+            let totalBatches = 0;
+            let totalPackets = 0;
+
+            for (let i = 0; i < NUM_BUCKETS; i++) {
+                totalLag += lagSums[i];
+                totalLagCount += lagCounts[i];
+                totalBatches += batchCounts[i];
+                totalPackets += packetCounts[i];
+            }
+
+            const avgLag = totalLagCount === 0 ? 0 : totalLag / totalLagCount;
+            lagValueSpan.innerText = avgLag.toFixed(1);
+
+            ppsValueSpan.innerText = totalPackets.toLocaleString();
+            bpsValueSpan.innerText = totalBatches.toLocaleString();
+
+            if (avgLag < 50) lagValueSpan.style.color = '#3fb950';
+            else if (avgLag < 500) lagValueSpan.style.color = '#e3b341'; 
+            else lagValueSpan.style.color = '#ff7b72'; 
+
+            currentBucket = (currentBucket + 1) % NUM_BUCKETS;
+            lagSums[currentBucket] = 0;
+            lagCounts[currentBucket] = 0;
+            batchCounts[currentBucket] = 0;
+            packetCounts[currentBucket] = 0;
+        }, 100);
+        // ----------------------------------------------
+
+        function resizeAndCalculateGrid() {
+            const availableWidth = window.innerWidth * 0.95; 
+            const availableHeight = window.innerHeight - uiBar.offsetHeight - 45; 
+
+            COLS = Math.floor(availableWidth / CELL_SIZE);
+            ROWS = Math.floor(availableHeight / CELL_SIZE);
+            TOTAL_SQUARES = COLS * ROWS;
+
+            canvas.width = COLS * CELL_SIZE;
+            canvas.height = ROWS * CELL_SIZE;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            currentIndex = 0;
+        }
+
+        resizeAndCalculateGrid();
+        window.addEventListener('resize', resizeAndCalculateGrid);
+
+        function getPacketColor(p) {
+            if (p.etherType !== 2048) return '#ff7b72'; 
+            switch (p.networkProtocol) {
+                case 6: return '#58a6ff';  
+                case 17: return '#3fb950'; 
+                case 1: return '#e3b341';  
+                default: return '#bc8cff'; 
+            }
+        }
+
+        const ws = new WebSocket('ws://localhost:8000/packets/');
+
+        ws.onmessage = async (event) => {
+            try {
+                let text = event.data;
+                
+                // Ensure Blob fallback handling just in case the browser interprets frames as binary
+                if (text instanceof Blob) {
+                    text = await text.text();
+                }
+
+                let data = JSON.parse(text);
+                
+                // NORMALIZATION FIX:
+                // If the server sends a single object instead of an array, wrap it in an array.
+                // This prevents `batch.length` from becoming undefined.
+                const batch = Array.isArray(data) ? data : [data];
+                
+                batchCounts[currentBucket]++;
+                packetCounts[currentBucket] += batch.length;
+                
+                const now = Date.now();
+
+                for (let i = 0; i < batch.length; i++) {
+                    const packet = batch[i];
+
+                    // Safely check captureTime to prevent NaN lag calculations
+                    if (packet.captureTime) {
+                        const packetTime = new Date(packet.captureTime).getTime();
+                        if (!isNaN(packetTime)) {
+                            const lag = now - packetTime;
+                            lagSums[currentBucket] += lag;
+                            lagCounts[currentBucket]++;
+                        }
+                    }
+
+                    const color = getPacketColor(packet);
+                    const col = currentIndex % COLS;
+                    const row = Math.floor(currentIndex / COLS);
+                    const x = col * CELL_SIZE;
+                    const y = row * CELL_SIZE;
+
+                    ctx.fillStyle = color;
+                    ctx.fillRect(x, y, SQUARE_SIZE, SQUARE_SIZE);
+
+                    currentIndex++;
+
+                    if (currentIndex >= TOTAL_SQUARES) {
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        currentIndex = 0;
+                    }
+                }
+            } catch (error) {
+                console.error("Failed to process incoming WebSocket message:", error);
+            }
+        };
+
+        ws.onclose = () => console.log("Connection lost. Refresh the page to reconnect.");
+    </script>
+</body>
+</html>

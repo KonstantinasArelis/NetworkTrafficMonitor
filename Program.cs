@@ -8,13 +8,15 @@ using System.Threading.Channels;
 using System.Net.WebSockets;
 using System.Text.Json;
 using System.Net;
+using System.Diagnostics;
 
 public class Program
 {
     private static readonly CancellationTokenSource _cts = new CancellationTokenSource();
 
-    public static void Main(string[] args)
+    public async static Task Main(string[] args)
     {
+
         Console.CancelKeyPress += (sender, e) =>
         {
             Console.WriteLine("\n[!] Ctrl+C detected. Shutting down gracefully...");
@@ -36,16 +38,19 @@ public class Program
         //     Console.WriteLine(device.ToString());
         // }
 
-        ICaptureDevice myDevice = devices.First(d => d.Name == "enp5s0");
-        //ICaptureDevice myDevice = devices.First(d => d.Name == "lo");
+        //ICaptureDevice myDevice = devices.First(d => d.Name == "enp5s0");
+        ICaptureDevice myDevice = devices.First(d => d.Name == "lo");
 
-        int readTimeoutMilliseconds = 100;
+        int readTimeoutMilliseconds = 1;
         myDevice.Open(DeviceModes.Promiscuous, readTimeoutMilliseconds);
 
         PacketCapture packet;
         GetPacketStatus status;
         Channel<ParsedPacket> channel = Channel.CreateUnbounded<ParsedPacket>();
         Task consumer = ConsumeAsync(channel.Reader, _cts.Token);
+
+        Stopwatch stopwatch = new Stopwatch();
+        stopwatch.Start();
 
         while (!_cts.Token.IsCancellationRequested)
         {
@@ -68,17 +73,28 @@ public class Program
 
         ICaptureStatistics stats = myDevice.Statistics;
 
+        TimeSpan ts = stopwatch.Elapsed;
+        stopwatch.Stop();
+        string elapsedTime = String.Format("{0:00}:{1:00}:{2:00}.{3:00}",
+            ts.Hours, ts.Minutes, ts.Seconds,
+            ts.Milliseconds / 10);
+
         Console.WriteLine("--- Capture Statistics ---");
+        Console.WriteLine("Monitoring time: " + elapsedTime);
+        Console.WriteLine($"Average packets / second: ${stats.ReceivedPackets / ts.TotalSeconds:N0}");
         Console.WriteLine($"Total Packets Received by OS: {stats.ReceivedPackets}");
         Console.WriteLine($"Total Packets Dropped by OS Buffer: {stats.DroppedPackets}");
         Console.WriteLine($"Total Packets Dropped by NIC Hardware: {stats.InterfaceDroppedPackets}");
 
         myDevice.Close();
+        channel.Writer.Complete();
+        await consumer;
     }
 
-    private static async Task ConsumeAsync(ChannelReader<ParsedPacket> reader, CancellationToken token)
+    private static async Task ConsumeAsync(ChannelReader<ParsedPacket> reader, CancellationToken manualCancelationToken)
     {
         using HttpListener listener = new HttpListener();
+        using CancellationTokenRegistration registration = manualCancelationToken.Register(() => listener.Abort() );
         listener.Prefixes.Add("http://localhost:8000/packets/");
         listener.Start();
         Console.WriteLine("C# WebSocket Server running! Waiting for browser on ws://localhost:8000/packets/");
@@ -88,11 +104,24 @@ public class Program
             IncludeFields = true 
         };
 
+        List<int> batchSizes = new List<int>();
         try
         {
-            while (!token.IsCancellationRequested)
+            while (!manualCancelationToken.IsCancellationRequested)
             {
-                HttpListenerContext httpListenerContext = await listener.GetContextAsync();
+                HttpListenerContext httpListenerContext;
+                try
+                {
+                    httpListenerContext = await listener.GetContextAsync();
+                } 
+                catch (HttpListenerException)
+                {
+                    break;
+                }
+                catch (ObjectDisposedException)
+                {
+                    break;
+                }
 
                 if (!httpListenerContext.Request.IsWebSocketRequest)
                 {
@@ -105,24 +134,57 @@ public class Program
                 using WebSocket ws = webSocketContext.WebSocket;
                 Console.WriteLine("Browser connected! Streaming packets...");
 
-                try
+                int maxBatchSize = 5000;
+                TimeSpan maxWaitTime = TimeSpan.FromMilliseconds(16); // ~60 fps
+                List<ParsedPacket> batch = new List<ParsedPacket>();
+
+                while (!manualCancelationToken.IsCancellationRequested)
                 {
-                    await foreach (ParsedPacket item in reader.ReadAllAsync(token))
+                    using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(manualCancelationToken);
+                    cts.CancelAfter(maxWaitTime);
+                    CancellationToken CombinedCancelationToken = cts.Token; 
+
+                    try
                     {
-                        Console.WriteLine(item.ToString());
+                        while (await reader.WaitToReadAsync(CombinedCancelationToken))
+                        {
+                            while (batch.Count < maxBatchSize && reader.TryRead(out var packet))
+                            {
+                                batch.Add(packet);
+                            }
 
-                        byte[] jsonBytes = JsonSerializer.SerializeToUtf8Bytes(item, jsonOptions);
-
-                        await ws.SendAsync(
-                            buffer: jsonBytes,
-                            messageType: WebSocketMessageType.Text,
-                            endOfMessage: true,
-                            cancellationToken: token);
+                            if (batch.Count >= maxBatchSize)
+                            {
+                                break;
+                            }
+                        }
                     }
-                }
-                catch (Exception)
-                {
-                    Console.WriteLine("Browser disconnected. Waiting for a new connection...");
+                    catch (OperationCanceledException)
+                    {
+
+                    }
+
+                    if (batch.Count > 0)
+                    {
+                        batchSizes.Add(batch.Count);
+                        byte[] jsonBytes = JsonSerializer.SerializeToUtf8Bytes(batch, jsonOptions);
+                        
+                        try
+                        {
+                            await ws.SendAsync(
+                                buffer: jsonBytes,
+                                messageType: WebSocketMessageType.Text,
+                                endOfMessage: true,
+                                cancellationToken: manualCancelationToken);
+
+                            batch.Clear();   
+                        }
+                        catch (WebSocketException)
+                        {
+                            Console.WriteLine("Browser disconnected. Waiting for a new connection...");
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -132,12 +194,20 @@ public class Program
         }
         finally
         {
-            listener.Stop();
+            if (batchSizes.Count > 0)
+            {
+                Console.WriteLine($"Average batch size: {batchSizes.Average():N0}");
+            }
+            else
+            {
+                Console.WriteLine("Average batch size: 0 (No batches were sent)");
+            }
         }
     }
 
     private static void device_OnPacketArrival(PacketCapture packet, object sender = null, ChannelWriter<ParsedPacket> writer = null)
     {
+        DateTime packetTimestamp = packet.Header.Timeval.Date;
         // Preamble, SFD, CRC are already stripped from packet
         ReadOnlySpan<byte> L2_Frame = packet.Data;
         int L2_FrameLength = L2_Frame.Length;
@@ -159,6 +229,7 @@ public class Program
         if (L2_EtherType != 0x0800) 
         {
             ParsedPacket nonIpPacket = new ParsedPacket(
+                captureTime: packetTimestamp,
                 sourceMac: L2_SourceMAC,
                 destMac: L2_DestinationMAC,
                 etherType: L2_EtherType
@@ -214,6 +285,7 @@ public class Program
         if (L3_Protocol != 6 && L3_Protocol != 17)
         {
             ParsedPacket ipButNotTcpUdpPacket = new ParsedPacket(
+                captureTime: packetTimestamp,
                 sourceMac: L2_SourceMAC,
                 destMac: L2_DestinationMAC,
                 etherType: L2_EtherType,
@@ -230,6 +302,7 @@ public class Program
         ushort L4_DestPort = BinaryPrimitives.ReadUInt16BigEndian(L3_Payload.Slice(2, 2));
 
         ParsedPacket fullTcpUdpPacket = new ParsedPacket(
+            captureTime: packetTimestamp,
             sourceMac: L2_SourceMAC,
             destMac: L2_DestinationMAC,
             etherType: L2_EtherType,
@@ -281,6 +354,7 @@ public class Program
 
     readonly struct ParsedPacket
     {
+        public readonly DateTime captureTime;
         public readonly ulong sourceMac;
         public readonly ulong destMac;
         public readonly ushort etherType;
@@ -292,6 +366,7 @@ public class Program
         public readonly byte? networkProtocol;
 
         public ParsedPacket(
+            DateTime captureTime,
             ulong sourceMac, 
             ulong destMac, 
             ushort etherType, 
@@ -301,6 +376,7 @@ public class Program
             ushort? sourcePort = null, 
             ushort? destPort = null)
         {
+            this.captureTime = captureTime;
             this.sourceMac = sourceMac;
             this.destMac = destMac;
             this.etherType = etherType;
@@ -338,5 +414,18 @@ public class Program
     }
 }
 
-// why are subnet masks needed? (aside from network administration)
 // sql lite periodic flush
+
+/* For performance analysis
+dotnet tool install --global dotnet-counters
+dotnet-counters monitor -n TrafficAnalyzer
+
+dotnet tool install --global dotnet-trace
+dotnet-trace collect -p $(pidof TrafficAnalyzer) --duration 00:00:10
+https://www.speedscope.app/
+
+dotnet tool install --global dotnet-gcdump
+dotnet-gcdump collect -p $(pidof TrafficAnalyzer)
+
+*/
+
