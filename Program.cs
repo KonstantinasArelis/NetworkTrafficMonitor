@@ -429,3 +429,4 @@ dotnet-gcdump collect -p $(pidof TrafficAnalyzer)
 
 */
 
+// consider ahead of time compilation to try faster start times
