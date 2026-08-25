@@ -44,6 +44,8 @@ ScaffoldingReadMe.txt
 *~
 CodeCoverage/
 plan.md
+plan2.md
+planMeta.md
 
 # MSBuild Binary and Structured Log
 *.binlog
