@@ -20,12 +20,12 @@ echo "Im building in $TARGET mode"
 dotnet build -c "$TARGET"
 
 if [[ "$TARGET" == "Debug" ]]; then
-    EXECUTABLE_PATH="./bin/Debug/net10.0/TrafficAnalyzer"
+    EXECUTABLE_PATH="src/TrafficAnalyzer.Client/bin/Debug/net10.0/TrafficAnalyzer.Client"
 fi
 
 if [[ "$TARGET" == "Release" ]]; then
     # not sure if path is correct
-    EXECUTABLE_PATH="./bin/Release/net10.0/TrafficAnalyzer"
+    EXECUTABLE_PATH="src/TrafficAnalyzer.Client/bin/Release/net10.0/TrafficAnalyzer.Client"
 fi
 
 echo "Im granting permissions"

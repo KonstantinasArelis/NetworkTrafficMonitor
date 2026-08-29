@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TrafficAnalyzer.Client/TrafficAnalyzer.Client.csproj" />
+    <Project Path="src/TrafficAnalyzer.Core/TrafficAnalyzer.Core.csproj" />
+    <Project Path="src/TrafficAnalyzer.Capture/TrafficAnalyzer.Capture.csproj" />
+    <Project Path="src/TrafficAnalyzer.Parser/TrafficAnalyzer.Parser.csproj" />
+  </Folder>
+</Solution>
