@@ -23,14 +23,20 @@ public class Capture : ICapture
             return;
         }
 
-        // Console.WriteLine("Available devices found:");
-        // foreach (ICaptureDevice device in devices)
-        // {
-        //     Console.WriteLine(device.ToString());
-        // }
+        //Console.WriteLine("Available devices found:");
+        //foreach (ICaptureDevice device in devices)
+        //{
+        //    Console.WriteLine(device.ToString());
+        //}
 
         string deviceName = GetDeviceName();
-        ICaptureDevice myDevice = devices.First(d => d.Name == deviceName);
+        ICaptureDevice myDevice = devices.FirstOrDefault(d => d.Name == deviceName);
+
+        if (myDevice == null)
+        {
+            Console.WriteLine($"Network interface with name {deviceName} could not be found! Exiting...");
+            return;
+        }
 
         int readTimeoutMilliseconds = 1;
         myDevice.Open(DeviceModes.Promiscuous, readTimeoutMilliseconds);
@@ -99,9 +105,9 @@ public class Capture : ICapture
     {
         if (OperatingSystem.IsWindows())
         {
-            Console.WriteLine("Windows not supported. Exiting...");
-            throw new NotImplementedException();
-        } 
+            //return @"\Device\NPF_Loopback";
+            return @"\Device\NPF_{0D004628-CCB9-4617-8177-C4DDA643AA38}";
+        }
         else if (OperatingSystem.IsLinux())
         {
             return "lo";

@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "TrafficAnalyzer.DesktopClient (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "TrafficAnalyzer.DesktopClient (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

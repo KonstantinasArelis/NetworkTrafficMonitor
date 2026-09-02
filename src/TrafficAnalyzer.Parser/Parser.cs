@@ -8,6 +8,8 @@ public class Parser
 {
     public static ParsedPacket? ParsePacket(PacketCapture packet)
     {
+        //PrintHexDump(packet.Data);
+
         DateTime packetTimestamp = packet.Header.Timeval.Date;
         // Preamble, SFD, CRC are already stripped from packet
         ReadOnlySpan<byte> L2_Frame = packet.Data;
@@ -41,6 +43,11 @@ public class Parser
 
         // LAYER 3
         ushort ipTotalLength = BinaryPrimitives.ReadUInt16BigEndian(L2_Frame.Slice(16, 2));
+        if (ipTotalLength == 0)
+        {
+            // The IP packet length is the total captured frame minus the 14-byte Ethernet header
+            ipTotalLength = (ushort)(L2_Frame.Length - 14);
+        }
 
         if (L2_Frame.Length < ipTotalLength + 14)
         {
@@ -115,5 +122,36 @@ public class Parser
         return fullTcpUdpPacket;
         //Console.WriteLine("frameLength={0} | EtherType=0x{1:X4} | dest MAC {2:X12} | source MAC {3:X12} | ipPayloadLength {4} | source {5}:{6} | dest {7}:{8} | {9}", 
         //    L2_FrameLength, L2_EtherType, L2_DestinationMAC, L2_SourceMAC, ipTotalLength, ToIpString(L3_SourceIp), L4_SourcePort, ToIpString(L3_DestIp), L4_DestPort, TcpOrUdpToString(L3_Protocol));
+    }
+
+    private static void PrintHexDump(ReadOnlySpan<byte> data)
+    {
+        int length = Math.Min(data.Length, 64); // Only print the headers to avoid terminal spam
+        Console.WriteLine($"\n--- Packet Captured ({data.Length} bytes total) ---");
+
+        for (int i = 0; i < length; i += 16)
+        {
+            Console.Write($"{i:X4}  "); // Print offset (e.g., 0000, 0010)
+
+            // Print hex values
+            for (int j = 0; j < 16; j++)
+            {
+                if (i + j < length) Console.Write($"{data[i + j]:X2} ");
+                else Console.Write("   ");
+            }
+
+            Console.Write(" ");
+
+            // Print readable ASCII characters
+            for (int j = 0; j < 16; j++)
+            {
+                if (i + j < length)
+                {
+                    char c = (char)data[i + j];
+                    Console.Write(char.IsControl(c) || c > 127 ? '.' : c);
+                }
+            }
+            Console.WriteLine();
+        }
     }
 }

@@ -5,4 +5,8 @@
     <Project Path="src/TrafficAnalyzer.Capture/TrafficAnalyzer.Capture.csproj" />
     <Project Path="src/TrafficAnalyzer.Parser/TrafficAnalyzer.Parser.csproj" />
   </Folder>
+  <Project Path="src/TrafficAnalyzer.DesktopClient/TrafficAnalyzer.DesktopClient.csproj" Id="3ec0181f-e8af-47b5-846e-5e8bdf4cf16c">
+    <Platform Project="x64" />
+    <Deploy />
+  </Project>
 </Solution>

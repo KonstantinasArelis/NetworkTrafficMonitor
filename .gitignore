@@ -58,3 +58,23 @@ planMeta.md
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# Visual Studio & WinUI / MSIX packaging artifacts
+.vs/
+*.suo
+*.user
+*.userosscache
+*.VC.db
+AppPackages/
+*.appx
+*.appxbundle
+*.msix
+*.msixbundle
+*.appinstaller
+*.msixupload
+Package.StoreAssociation.xml
+**/obj/**/Package/**
+*.pri
+
+# JetBrains Rider
+.idea/
